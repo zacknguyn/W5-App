@@ -1,0 +1,14 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "market-monitor-surveillance"
+resolve_s3 = true
+s3_prefix = "market-monitor-surveillance"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+disable_rollback = true
+parameter_overrides = "DBSecretArn=\"arn:aws:secretsmanager:us-west-2:916586394009:secret:rds!db-647eb587-3a94-4950-b230-7c2610e7e92c-hfiFXi\""
+image_repositories = []
+
+[default.global.parameters]
+region = "us-west-2"

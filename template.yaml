@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Vietnamese Market Surveillance Platform
+  Architecture: Event-driven pipeline with layered filtering and batch anomaly scanning.
+
+Parameters:
+  DBSecretArn:
+    Type: String
+    Description: ARN of the AWS Secrets Manager secret containing RDS credentials.
+    Default: "arn:aws:secretsmanager:region:account:secret:MarketSurveillanceDB-xxxxxx"
+
+Globals:
+  Function:
+    Timeout: 60
+    Runtime: python3.12
+    MemorySize: 512
+    Environment:
+      Variables:
+        DB_SECRET_ARN: !Ref DBSecretArn
+        SNS_TOPIC_ARN: !Ref MarketEventsTopic
+        EFS_MOUNT_PATH: /mnt/efs
+        VNSTOCK_SOURCE: KBS
+        RECORD_ALERTS_AFTER_HOURS: "0"
+
+Resources:
+  # --- 1. STORAGE & NETWORK ---
+  
+  # Note: VPC, Subnets, Security Groups, and EFS Filesystem should be created separately 
+  # or passed as parameters. For this template, we assume standard naming/access.
+
+  # --- 2. MESSAGING BACKBONE ---
+  
+  MarketEventsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: Market_Events_Topic
+
+  PriorityAlertsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: Priority_Alerts_Queue
+      VisibilityTimeout: 120
+
+  StandardAlertsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: Standard_Alerts_Queue
+      VisibilityTimeout: 120
+
+  AnomalyDLQ: # DELIVERABLE: SCALING PATTERN 3 (Async + DLQ)
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: AnomalyLoggingService_DLQ
+
+  # SNS -> SQS Subscriptions with Filter Policies
+  PrioritySubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref MarketEventsTopic
+      Endpoint: !GetAtt PriorityAlertsQueue.Arn
+      Protocol: sqs
+      FilterPolicy:
+        priority: ["high"]
+
+  StandardSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref MarketEventsTopic
+      Endpoint: !GetAtt StandardAlertsQueue.Arn
+      Protocol: sqs
+      FilterPolicy:
+        priority: ["standard"]
+
+  # --- 3. THE 4 CORE LAMBDAS ---
+
+  MarketUpdaterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: Market_Updater
+      Handler: backend.handlers.market_updater_handler
+      CodeUri: deployment/
+      Events:
+        MinuteTimer:
+          Type: Schedule
+          Properties:
+            Schedule: "rate(1 minute)"
+            Name: EveryMinuteIngest
+            Enabled: True
+      Policies:
+        - AWSLambdaVPCAccessExecutionRole
+        - AmazonElasticFileSystemClientFullAccess
+        - SecretsManagerReadWrite # To update price metadata if needed
+
+  AnomalyLoggingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: Anomaly_Logging_Service
+      Handler: backend.handlers.anomaly_logging_handler
+      CodeUri: deployment/
+      # --- SCALING PATTERN 3: ASYNC + DLQ CONFIG ---
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt AnomalyDLQ.Arn
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+      # ---------------------------------------------
+      Events:
+        MorningBatch:
+          Type: Schedule
+          Properties:
+            Schedule: "cron(30 11 ? * MON-FRI *)"
+        AfternoonBatch:
+          Type: Schedule
+          Properties:
+            Schedule: "cron(0 15 ? * MON-FRI *)"
+      Policies:
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt MarketEventsTopic.TopicName
+        - AWSLambdaVPCAccessExecutionRole
+        - AmazonElasticFileSystemClientFullAccess
+
+  DataAggregationWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: Data_Aggregation_Worker
+      Handler: backend.handlers.data_worker_handler
+      CodeUri: deployment/
+      Events:
+        PrioritySQS:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt PriorityAlertsQueue.Arn
+            BatchSize: 10
+        StandardSQS:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt StandardAlertsQueue.Arn
+            BatchSize: 10
+      Policies:
+        - AWSLambdaVPCAccessExecutionRole
+
+  AssetReaderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: Asset_Reader
+      Handler: backend.handlers.asset_reader_handler
+      CodeUri: deployment/
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: any
+      Policies:
+        - AWSLambdaVPCAccessExecutionRole
+
+Outputs:
+  ApiEndpoint:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
