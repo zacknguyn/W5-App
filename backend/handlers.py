@@ -1,4 +1,9 @@
+from __future__ import annotations
+
+import json
 import os
+from typing import Any
+
 import pandas as pd
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -61,7 +66,24 @@ def market_updater_handler(event: dict[str, Any], context: Any = None) -> dict[s
         return {"status": "error", "message": str(e)}
 
 
-# --- 2. ANOMALY LOGGING SERVICE (BATCH) ---
+# --- 2. MARKET PUSH (FROM LAPTOP) ---
+
+def market_push_handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
+    """Accepts a POST with raw price board rows from the laptop, processes and writes to RDS."""
+    try:
+        body = read_json(event)
+        rows = body.get("rows")
+        if not isinstance(rows, list) or not rows:
+            return response(400, {"message": "rows must be a non-empty list"})
+
+        assets = market_provider.process_price_board(rows)
+        return response(200, {"status": "success", "assets_count": len(assets)})
+    except Exception as e:
+        print(f"Error in market_push: {e}")
+        return response(500, {"status": "error", "message": str(e)})
+
+
+# --- 3. ANOMALY LOGGING SERVICE (BATCH) ---
 
 def anomaly_logging_handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
     """Triggered at 11:30 and 15:00. Scans EFS CSV for breaches."""
@@ -144,6 +166,8 @@ def asset_reader_handler(event: dict[str, Any], context: Any = None) -> dict[str
         return get_settings(event)
     elif method == "PUT" and path == "/settings":
         return save_settings(event)
+    elif method == "POST" and path == "/market-push":
+        return market_push_handler(event)
     elif method == "OPTIONS":
         return options(event)
     

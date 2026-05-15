@@ -48,7 +48,7 @@ def set_settings(next_settings: dict[str, Any]) -> dict[str, Any]:
         connection.executemany(
             """
             INSERT INTO settings (key, value)
-            VALUES (?, ?)
+            VALUES (%s, %s)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
             """,
             values.items(),
@@ -105,7 +105,7 @@ def save_alert_to_db(alert: dict[str, Any]) -> dict[str, Any]:
             INSERT INTO alert_history (
               id, ticker, price_at_event, message, priority, created_at, read
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 alert["id"],
@@ -123,7 +123,7 @@ def save_alert_to_db(alert: dict[str, Any]) -> dict[str, Any]:
 def is_watched(symbol: str) -> bool:
     with connect() as connection:
         row = connection.execute(
-            "SELECT watched FROM watchlist WHERE ticker = ?",
+            "SELECT watched FROM watchlist WHERE ticker = %s",
             (symbol.upper(),),
         ).fetchone()
 
@@ -137,7 +137,7 @@ def set_watched(symbol: str, watched: bool) -> None:
         connection.execute(
             """
             INSERT INTO watchlist (ticker, watched, updated_at)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
+            VALUES (%s, %s, CURRENT_TIMESTAMP)
             ON CONFLICT(ticker) DO UPDATE SET
               watched = excluded.watched,
               updated_at = CURRENT_TIMESTAMP
@@ -159,7 +159,7 @@ def add_snapshot(asset: dict[str, Any]) -> list[dict[str, Any]]:
             INSERT INTO asset_snapshots (
               ticker, label, price, threshold_high, threshold_low, volume
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (
                 symbol,
@@ -174,7 +174,7 @@ def add_snapshot(asset: dict[str, Any]) -> list[dict[str, Any]]:
             """
             SELECT label, price, threshold_high, threshold_low, volume
             FROM asset_snapshots
-            WHERE ticker = ?
+            WHERE ticker = %s
             ORDER BY id DESC
             LIMIT 7
             """,
@@ -210,14 +210,14 @@ def get_alerts() -> list[dict[str, Any]]:
 def mark_alert_read(alert_id: str) -> dict[str, Any] | None:
     with connect() as connection:
         connection.execute(
-            "UPDATE alert_history SET read = 1 WHERE id = ?",
+            "UPDATE alert_history SET read = 1 WHERE id = %s",
             (alert_id,),
         )
         row = connection.execute(
             """
             SELECT id, ticker, price_at_event, message, priority, created_at, read
             FROM alert_history
-            WHERE id = ?
+            WHERE id = %s
             """,
             (alert_id,),
         ).fetchone()
@@ -265,7 +265,7 @@ def record_anomalies(assets: list[dict[str, Any]], priority_symbols: set[str]) -
             INSERT OR IGNORE INTO alert_history (
               id, ticker, price_at_event, message, priority, created_at, read
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
             rows,
         )
@@ -277,7 +277,7 @@ def get_company_metadata(symbol: str) -> dict[str, Any] | None:
             """
             SELECT ticker, outstanding_shares, company_name, as_of_date, updated_at
             FROM company_metadata
-            WHERE ticker = ?
+            WHERE ticker = %s
             """,
             (symbol.upper(),),
         ).fetchone()
@@ -306,7 +306,7 @@ def save_company_metadata(
             INSERT INTO company_metadata (
               ticker, outstanding_shares, company_name, as_of_date, updated_at
             )
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
             ON CONFLICT(ticker) DO UPDATE SET
               outstanding_shares = excluded.outstanding_shares,
               company_name = excluded.company_name,

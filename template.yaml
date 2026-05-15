@@ -140,6 +140,22 @@ Resources:
       Policies:
         - AWSLambdaVPCAccessExecutionRole
 
+  MarketPushFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: Market_Push
+      Handler: backend.handlers.market_push_handler
+      CodeUri: deployment/
+      Events:
+        PushApi:
+          Type: Api
+          Properties:
+            Path: /market-push
+            Method: post
+      Policies:
+        - AWSLambdaVPCAccessExecutionRole
+        - AmazonElasticFileSystemClientFullAccess
+
   AssetReaderFunction:
     Type: AWS::Serverless::Function
     Properties:

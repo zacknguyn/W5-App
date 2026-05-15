@@ -73,6 +73,21 @@ class VnstockMarketProvider:
 
         return False
 
+    def process_price_board(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Process raw price board rows (from laptop push) through the same pipeline as _refresh_assets."""
+        assets = [self._row_to_asset(row) for row in rows]
+        self._enrich_and_rank_assets(assets)
+        for asset in assets:
+            history = add_snapshot(asset)
+            asset["chart"] = history
+            asset["trend"] = [point["price"] for point in history]
+            asset["watched"] = is_watched(asset["ticker"])
+            del asset["referencePrice"]
+            del asset["volume"]
+        self._cached_assets = assets
+        self._cached_at = monotonic()
+        return assets
+
     def _refresh_assets(self) -> list[dict[str, Any]]:
         symbols = load_monitored_symbols()
         if not symbols:
@@ -95,6 +110,14 @@ class VnstockMarketProvider:
         return assets
 
     def _fetch_price_board(self, symbols: list[str]) -> list[dict[str, Any]]:
+        import os
+        proxy_url = os.environ.get("VNSTOCK_PROXY_URL")
+        if proxy_url:
+            import requests
+            resp = requests.post(proxy_url, json={"symbols": symbols}, timeout=15)
+            resp.raise_for_status()
+            return resp.json()
+
         try:
             import vnai
             from vnstock import Trading

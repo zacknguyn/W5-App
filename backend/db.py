@@ -82,15 +82,15 @@ def connect() -> Iterator[Any]:
         
         secret = _get_db_secret(db_secret_arn)
         connection = psycopg2.connect(
-            host=secret['host'],
-            port=secret['port'],
-            dbname=secret['dbname'],
+            host=os.environ.get("DB_HOST", secret.get("host", "localhost")),
+            port=int(os.environ.get("DB_PORT", secret.get("port", 5432))),
+            dbname=os.environ.get("DB_NAME", secret.get("dbname", "postgres")),
             user=secret['username'],
             password=secret['password'],
             cursor_factory=RealDictCursor
         )
         try:
-            yield connection.cursor()
+            yield _PsycopgCursorWrapper(connection.cursor())
             connection.commit()
         except Exception:
             connection.rollback()
@@ -107,6 +107,34 @@ def connect() -> Iterator[Any]:
             connection.commit()
         finally:
             connection.close()
+
+
+class _PsycopgCursorWrapper:
+    """Makes a psycopg2 cursor behave like a sqlite3 connection for store.py compatibility.
+    sqlite3: connection.execute(sql, params).fetchone()
+    psycopg2: cursor.execute(sql, params); cursor.fetchone()
+    """
+    def __init__(self, cursor: Any) -> None:
+        self._cursor = cursor
+
+    def execute(self, sql: str, params: tuple = ()) -> "_PsycopgCursorWrapper":
+        self._cursor.execute(sql, params)
+        return self
+
+    def executemany(self, sql: str, params_seq: Any) -> "_PsycopgCursorWrapper":
+        self._cursor.executemany(sql, params_seq)
+        return self
+
+    def fetchone(self) -> Any:
+        row = self._cursor.fetchone()
+        return dict(row) if row else None
+
+    def fetchall(self) -> list[Any]:
+        return [dict(r) for r in self._cursor.fetchall()]
+
+    @property
+    def lastrowid(self) -> Any:
+        return self._cursor.lastrowid
 
 
 def _get_db_secret(secret_arn: str) -> dict[str, Any]:
